@@ -16,6 +16,8 @@
 
 package com.android.dialer;
 
+import android.content.ComponentName;
+import android.graphics.drawable.Drawable;
 import com.android.dialer.calllog.PhoneNumberDisplayUtil;
 
 import android.content.Context;
@@ -66,6 +68,8 @@ public class PhoneCallDetails {
      */
     public Uri photoUri;
 
+    public long photoId;
+
     // The source type of the contact associated with this call.
     public int sourceType;
 
@@ -87,8 +91,17 @@ public class PhoneCallDetails {
     // The display string for the number.
     public String displayNumber;
 
+    // InCallAPI plugin component name
+    public ComponentName inCallComponentName;
+
     // Whether the contact number is a voicemail number.
     public boolean isVoicemail;
+
+    public boolean isSpam;
+    public int spamCount;
+    public String photoUrl;
+    public String lookupProviderName;
+    public Drawable attributionDrawable;
 
     /**
      * If this is a voicemail, whether the message is read. For other types of calls, this defaults

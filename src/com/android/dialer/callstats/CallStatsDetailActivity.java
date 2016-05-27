@@ -19,6 +19,7 @@ package com.android.dialer.callstats;
 
 import android.app.ActionBar;
 import android.app.Activity;
+import android.app.DialogFragment;
 import android.content.Intent;
 import android.content.res.Resources;
 import android.net.Uri;
@@ -37,6 +38,8 @@ import android.widget.TextView;
 import com.android.contacts.common.CallUtil;
 import com.android.contacts.common.ContactPhotoManager;
 import com.android.contacts.common.GeoUtil;
+import com.android.contacts.common.activity.fragment.BlockContactDialogFragment;
+import com.android.contacts.common.util.BlockContactHelper;
 import com.android.contacts.common.util.UriUtils;
 import com.android.dialer.R;
 import com.android.dialer.calllog.CallTypeIconsView;
@@ -45,11 +48,14 @@ import com.android.dialer.calllog.ContactInfoHelper;
 import com.android.dialer.util.IntentUtil;
 import com.android.dialer.util.PhoneNumberUtil;
 import com.android.dialer.widget.LinearColorBar;
+import com.cyanogen.lookup.phonenumber.contract.LookupProvider;
+import com.cyanogen.lookup.phonenumber.provider.LookupProviderImpl;
 
 /**
  * Activity to display detailed information about a callstat item
  */
-public class CallStatsDetailActivity extends Activity {
+public class CallStatsDetailActivity extends Activity implements
+        BlockContactDialogFragment.Callbacks {
     private static final String TAG = "CallStatsDetailActivity";
 
     public static final String EXTRA_DETAILS = "details";
@@ -58,6 +64,7 @@ public class CallStatsDetailActivity extends Activity {
     public static final String EXTRA_TO = "to";
 
     private ContactInfoHelper mContactInfoHelper;
+    private BlockContactHelper mBlockContactHelper;
     private Resources mResources;
 
     private QuickContactBadge mQuickContactBadge;
@@ -81,17 +88,22 @@ public class CallStatsDetailActivity extends Activity {
     private String mNumber = null;
     private boolean mHasEditNumberBeforeCallOption;
 
+    private LookupProvider mLookupProvider;
+
     private class UpdateContactTask extends AsyncTask<String, Void, ContactInfo> {
         @Override
         protected ContactInfo doInBackground(String... strings) {
-            ContactInfo info = mContactInfoHelper.lookupNumber(strings[0], strings[1]);
+            ContactInfo info = mContactInfoHelper.lookupNumber(strings[0], strings[1],
+                    Boolean.valueOf(strings[2]));
             return info;
         }
 
         @Override
         protected void onPostExecute(ContactInfo info) {
-            mData.updateFromInfo(info);
-            updateData();
+            if (info != null) {
+                mData.updateFromInfo(info);
+                updateData();
+            }
         }
     }
 
@@ -102,7 +114,10 @@ public class CallStatsDetailActivity extends Activity {
         setContentView(R.layout.call_stats_detail);
 
         mResources = getResources();
-        mContactInfoHelper = new ContactInfoHelper(this, GeoUtil.getCurrentCountryIso(this));
+        mLookupProvider = LookupProviderImpl.INSTANCE.get(this);
+        mContactInfoHelper = new ContactInfoHelper(this, GeoUtil.getCurrentCountryIso(this),
+                mLookupProvider);
+        mBlockContactHelper = new BlockContactHelper(this);
 
         mQuickContactBadge = (QuickContactBadge) findViewById(R.id.quick_contact_photo);
         mQuickContactBadge.setOverlay(null);
@@ -169,7 +184,18 @@ public class CallStatsDetailActivity extends Activity {
     @Override
     public void onResume() {
         super.onResume();
-        new UpdateContactTask().execute(mData.number.toString(), mData.countryIso);
+        new UpdateContactTask().execute(mData.number.toString(), mData.countryIso,
+                String.valueOf(mData.isInCallPluginContactId));
+    }
+
+    @Override
+    public void onBlockSelected(boolean notifyLookupProvider) {
+        mBlockContactHelper.blockContactAsync(notifyLookupProvider);
+    }
+
+    @Override
+    public void onUnblockSelected(boolean notifyLookupProvider) {
+        mBlockContactHelper.unblockContactAsync(notifyLookupProvider);
     }
 
     private void updateData() {
@@ -183,6 +209,7 @@ public class CallStatsDetailActivity extends Activity {
                 : mData.geocode;
 
         mData.updateDisplayPropertiesIfNeeded(this);
+        mBlockContactHelper.setContactInfo(mNumber);
 
         final boolean isSipNumber = PhoneNumberUtil.isSipNumber(mNumber);
         mHasEditNumberBeforeCallOption =
@@ -279,31 +306,45 @@ public class CallStatsDetailActivity extends Activity {
     }
 
     @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        LookupProviderImpl.INSTANCE.release();
+    }
+
+    @Override
     public boolean onPrepareOptionsMenu(Menu menu) {
-        menu.findItem(R.id.menu_edit_number_before_call).setVisible(
-                mHasEditNumberBeforeCallOption);
+        menu.findItem(R.id.menu_edit_number_before_call)
+                .setVisible(mHasEditNumberBeforeCallOption);
+
+        boolean canBlock = mBlockContactHelper.canBlockContact(this);
+        menu.findItem(R.id.menu_block_contact)
+                .setVisible(canBlock)
+                .setTitle(canBlock && mBlockContactHelper.isContactBlacklisted()
+                        ? R.string.menu_unblock_contact : R.string.menu_block_contact);
+
         return super.onPrepareOptionsMenu(menu);
     }
 
     @Override
     public boolean onMenuItemSelected(int featureId, MenuItem item) {
         switch (item.getItemId()) {
-            case android.R.id.home: {
+            case android.R.id.home:
                 onHomeSelected();
                 return true;
+            case R.id.menu_edit_number_before_call:
+                startActivity(new Intent(Intent.ACTION_DIAL, CallUtil.getCallUri(mNumber)));
+                return true;
+            case R.id.menu_block_contact: {
+                DialogFragment f = mBlockContactHelper.getBlockContactDialog(
+                        mBlockContactHelper.isContactBlacklisted() ?
+                                BlockContactHelper.BlockOperation.UNBLOCK :
+                                BlockContactHelper.BlockOperation.BLOCK
+                );
+                f.show(getFragmentManager(), "block_contact");
+                return true;
             }
-            // All the options menu items are handled by onMenu... methods.
-            default:
-                throw new IllegalArgumentException();
         }
-    }
-
-    public void onMenuEditNumberBeforeCall(MenuItem menuItem) {
-        startActivity(new Intent(Intent.ACTION_DIAL, CallUtil.getCallUri(mNumber)));
-    }
-
-    public void onMenuAddToBlacklist(MenuItem menuItem) {
-        mContactInfoHelper.addNumberToBlacklist(mNumber);
+        return false;
     }
 
     private void onHomeSelected() {

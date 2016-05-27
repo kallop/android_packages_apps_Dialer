@@ -58,9 +58,10 @@ public class CallLogAdapterTest extends AndroidTestCase {
         };
 
         ContactInfoHelper fakeContactInfoHelper =
-                new ContactInfoHelper(getContext(), TEST_COUNTRY_ISO) {
+                new ContactInfoHelper(getContext(), TEST_COUNTRY_ISO, null) {
                     @Override
-                    public ContactInfo lookupNumber(String number, String countryIso) {
+                    public ContactInfo lookupNumber(String number, String countryIso,
+                            boolean isInCallPluginContactId) {
                         ContactInfo info = new ContactInfo();
                         info.number = number;
                         info.formattedNumber = number;
@@ -204,7 +205,7 @@ public class CallLogAdapterTest extends AndroidTestCase {
     private static final class TestCallLogAdapter extends CallLogAdapter {
         public TestCallLogAdapter(Context context, CallFetcher callFetcher,
                 ContactInfoHelper contactInfoHelper) {
-            super(context, callFetcher, contactInfoHelper, null, false);
+            super(context, callFetcher, contactInfoHelper, null, null, false);
             mContactInfoCache = new TestContactInfoCache(
                     contactInfoHelper, mOnContactInfoChangedListener);
         }

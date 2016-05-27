@@ -38,8 +38,9 @@
   <!-- Chinese Reverse Lookup Provider -->
   <string name="cyngn_reverse_lookup_provider_name">Cyngn الصينية (CN)</string>
   <!-- Description for incoming calls that were blacklisted -->
-  <string name="menu_add_to_blacklist">إضافة إلى قائمة المتصلين المحظورين</string>
-  <string name="toast_added_to_blacklist">إضافة %s إلى قائمة المتصلين المحظورين</string>
+  <string name="type_blacklist">مكالمة من القائمة السوداء</string>
+  <string name="call_log_action_block">حظر المتصل</string>
+  <string name="call_log_action_unblock">تم حظر المتصل</string>
   <!--  for speed dial -->
   <string name="speed_dial_settings">إعدادات الاتصال السريع</string>
   <string name="speed_dial_not_set">(لم يتم تعيين)</string>
@@ -62,6 +63,11 @@
   <!-- Call statistics -->
   <string name="call_log_stats_title">الإحصائيات</string>
   <string name="callStatsDetailTitle">تفاصيل إحصائيات المكالمة</string>
+  <string name="call_stats_incoming">الواردة: <xliff:g id="value">%s</xliff:g></string>
+  <string name="call_stats_outgoing">الصادرة: <xliff:g id="value">%s</xliff:g></string>
+  <string name="call_stats_missed">لم يتم الرد عليها: <xliff:g id="value">%s</xliff:g></string>
+  <string name="call_stats_blacklisted">المحظورة: <xliff:g id="value">%s</xliff:g></string>
+  <string name="call_stats_percent"><xliff:g id="percent">%d</xliff:g>%%</string>
   <string name="call_stats_header_total">المجموع: <xliff:g id="call_count">%s</xliff:g><xliff:g id="duration">%s</xliff:g></string>
   <string name="call_stats_header_total_callsonly">المجموع: <xliff:g id="call_count"> %s </xliff:g></string>
   <string name="call_stats_filter_from">تاريخ البداية</string>
@@ -79,5 +85,60 @@
   <string name="call_stats_reset_filter">إعادة تعيين النطاق الزمني</string>
   <string name="call_stats_sort_by_duration">فرز بحسب مدة المكالمة</string>
   <string name="call_stats_sort_by_count">فرز بحسب عدد المكالمات</string>
+  <string name="call_stats_title_for_number">هذا الرقم</string>
+  <string name="call_stats_title_of_total">من الإجمالي</string>
+  <string name="call_stats_title_durations">مدد المكالمات</string>
+  <string name="call_stats_title_count">عدد المكالمات</string>
+  <string name="call_stats_title_average_duration">متوسط مدة المكالمة</string>
   <!-- Text displayed when there are no call log entries in the selected time range. -->
+  <string name="recent_calls_no_items_in_range">سجل المكالمات الخاص بك لا يحتوي على أي مكالمات في نطاق الوقت المحدد.</string>
+  <string name="call_recording_category_title">تسجيل المكالمات</string>
+  <string name="call_recording_format">تنسيق الصوت</string>
+  <string name="call_playback_no_app_found_toast">تعذر العثور على أي تطبيق لتشغيل التسجيل المحدد.</string>
+  <string name="invalid_number_text">"تعذر على %1$s إجراء هذه المكالمة. هل الرقم صحيح؟"</string>
+  <!-- T9 Search Text -->
+  <string name="empty_dialpad_t9_example">يمكنك الاتصال برقم هاتف أو\nالبحث عن جهة اتصال.</string>
+  <string name="sign_in_hint_text">قم بتسجيل الدخول لإجراء %1$s مكالمات</string>
+  <string name="wifi_hint_text">قم بإجراء %1$s إلى %1$s مكالمات مجانية عبر Wi-Fi.</string>
+  <string name="roaming_hint_text">%1$s في خدمة التجوال. قم بإجراء %2$s إلى %2$s مكالمات مجانية عبر Wi-Fi.</string>
+  <string name="emergency_call_hint_text">لا توجد SIM. مسموح بمكالمات الطوارئ فقط.</string>
+  <string name="extra_call_method_call_option">مكالمة <xliff:g id="provider">%s</xliff:g></string>
+  <!-- InCall Plugin Settings -->
+  <string name="incall_plugin_settings">إعدادات <xliff:g id="name">%1$s</xliff:g></string>
+  <!-- Search shortcut for "Call using PluginName" -->
+  <string name="search_shortcut_call_using">الاتصال باستخدام <xliff:g id="name">%1$s</xliff:g></string>
+  <!-- CallerInfo Provider Settings strings -->
+  <string name="callerinfo_provider_auth_yes">نعم</string>
+  <string name="callerinfo_provider_auth_no_short">لا</string>
+  <string name="callerinfo_provider_auth_no">لا شكرًا</string>
+  <string name="callerinfo_provider_auth_access">سيكون لدى <xliff:g id="provider_name">%s</xliff:g> إمكانية الوصول إلى جهات الاتصال الخاصة بك، ملف التعريف الخاص بي، وحساب Cyanogen OS، والذي قد يتضمن عنوان بريدك الإلكتروني.</string>
+  <string name="callerinfo_provider_auth_learn_more">تعلم المزيد</string>
+  <string name="callerinfo_provider_auth_desc">مرحباً! هل ترغب في أن يقوم <xliff:g id="provider_name">%s</xliff:g> بالتعرف على المتصلين المجهولين وحظر المكالمات غير المرغوبة؟</string>
+  <string name="callerinfo_provider_auth_desc_no_spam">مرحباً! هل ترغب في أن يقوم <xliff:g id="provider_name">%s</xliff:g> بالتعرف على المتصلين المجهولين؟</string>
+  <string name="callerinfo_provider_summary">تعريف المتصلين المجهولين وغير الهامين</string>
+  <string name="callerinfo_provider_summary_no_spam">تعريف المتصلين المجهولين</string>
+  <string name="silence_spam_title">إسكات المكالمات غير المرغوب فيها</string>
+  <string name="silence_spam_summary">عدم السماح مطلقاً للمكالمات غير المرغوب فيها بإصدار نغمة رنين</string>
+  <string name="block_hidden_title">حظر أرقام الهاتف المخفية</string>
+  <string name="block_hidden_summary">اعتبار الأرقام المخفية كأرقام عشوائية</string>
+  <string name="block_dialog_title">حظر هذا المتصل؟</string>
+  <string name="block_dialog_positive">حظر</string>
+  <string name="block_dialog_negative">إلغاء</string>
+  <string name="block_dialog_description">لن تصبح قادراً على تلقي المكالمات أو الرسائل من هذا الشخص بعد الآن.</string>
+  <string name="block_dialog_report_spam">الإبلاغ عن المكالمات باعتبارها عشوائية إلى <xliff:g id="provider">%s</xliff:g></string>
+  <string name="provider_disable_title">تعطيل %1$s؟</string>
+  <string name="provider_disable_message">بتعطيل %1$s، لن يكون لديك هوية متصل.</string>
+  <string name="provider_disable_spam_message">بتعطيل %1$s، لن يكون لديك حماية ضد الاتصالات غير الهامة أو معرف المتصل.</string>
+  <string name="powered_by_provider">مشغل بواسطة <xliff:g id="provider">%s</xliff:g></string>
+  <string name="provider_help">"إجراء %1$s مكالمات \nمن خلال تبديل الأوضاع هنا"</string>
+  <string name="provider_search_help">"البحث عن %1$s جهات اتصال \nمن خلال تبديل الأوضاع هنا"</string>
+  <string name="provider_button_help">"حصلت عليها"</string>
+  <string name="provider_voice_call">"المكالمة الصوتية %1$s"</string>
+  <string name="provider_video_call">"مكالمة الفيديو %1$s"</string>
+  <!-- Shown as a prompt to turn on the phone permission to allow a call to be placed -->
+  <string name="cm_permission_place_call">لإجراء مكالمة، قم بتشغيل أذونات الهاتف.</string>
+  <!-- Label of the button to view a note from a call log entry with associated DeepLink -->
+  <string name="search_shortcut_view_note">عرض الملاحظة</string>
+  <!-- Note DeepLink mod settings summary in Dialer -->
+  <string name="note_mod_settings_summary">تدوين الملاحظات من أي مكان</string>
 </resources>

@@ -74,6 +74,10 @@ public class SpecialCharSequenceMgr {
     private static final String MMI_IMEI_DISPLAY = "*#06#";
     private static final String MMI_REGULATORY_INFO_DISPLAY = "*#07#";
     private static final int IMEI_14_DIGIT = 14;
+    private static final String MMI_OPEN_DIAG_MENU_DISPLAY = "*76278#";
+    private static final String MMI_FACTORY_MODE_DISPLAY = "#38378#";
+    private static final String MMI_ENGINEER_MODE_DISPLAY = "*#7548135*#";
+
     /**
      * Remembers the previous {@link QueryHandler} and cancel the operation when needed, to
      * prevent possible crash.
@@ -136,14 +140,40 @@ public class SpecialCharSequenceMgr {
         //get rid of the separators so that the string gets parsed correctly
         String dialString = PhoneNumberUtils.stripSeparators(input);
 
-        if (handleDeviceIdDisplay(context, dialString)
-                || handleRegulatoryInfoDisplay(context, dialString)
-                || handlePinEntry(context, dialString)
-                || handleAdnEntry(context, dialString, textField)
-                || handleSecretCode(context, dialString)) {
-            return true;
+        if (context.getResources().getBoolean(R.bool.def_dialer_secretcode_enabled) ||
+                context.getResources().getBoolean(R.bool.def_dialer_settings_diagport_enabled)) {
+            if (handleDeviceIdDisplay(context, dialString)
+                    || handleRegulatoryInfoDisplay(context, dialString)
+                    || handleEngineerModeDisplay(context, dialString)
+                    || handlePinEntry(context, dialString)
+                    || handleAdnEntry(context, dialString, textField)
+                    || handleSecretCode(context, dialString)
+                    || handleFactorySetCode(context, dialString)
+                    || handleSetDiagPortCode(context, dialString)) {
+                return true;
+            }
+        } else {
+            if (handleDeviceIdDisplay(context, dialString)
+                    || handleRegulatoryInfoDisplay(context, dialString)
+                    || handleEngineerModeDisplay(context, dialString)
+                    || handlePinEntry(context, dialString)
+                    || handleAdnEntry(context, dialString, textField)
+                    || handleSecretCode(context, dialString)) {
+                return true;
+            }
         }
 
+        return false;
+    }
+
+    private static boolean handleSetDiagPortCode(Context context, String input) {
+        int len = input.length();
+        if (input.equals(MMI_OPEN_DIAG_MENU_DISPLAY)) {
+            Intent intent = new Intent(SECRET_CODE_ACTION,
+                    Uri.parse("android_secret_code://" + input.substring(1, len - 1)));
+            context.sendBroadcast(intent);
+            return true;
+        }
         return false;
     }
 
@@ -165,7 +195,8 @@ public class SpecialCharSequenceMgr {
     }
 
     /**
-     * Handles secret codes to launch arbitrary activities in the form of *#*#<code>#*#*.
+     * Handles secret codes to launch arbitrary activities in the form of *#*#<code>#*#* or
+     * any other code that is present in the oem_codes overlay list
      * If a secret code is encountered an Intent is started with the android_secret_code://<code>
      * URI.
      *
@@ -174,15 +205,32 @@ public class SpecialCharSequenceMgr {
      * @return true if a secret code was encountered
      */
     static boolean handleSecretCode(Context context, String input) {
-        // Secret codes are in the form *#*#<code>#*#*
         int len = input.length();
+        String sanitizedInput = null;
+        String[] oemCodes =  context.getResources().getStringArray(R.array.oem_specific_code);
         if (len > 8 && input.startsWith("*#*#") && input.endsWith("#*#*")) {
+                sanitizedInput = input.substring(4, len - 4);
+        } else if (Arrays.asList(oemCodes).contains(input)) {
+                sanitizedInput = input.replaceAll("[^0-9.]", "");
+        }
+        if (sanitizedInput != null) {
             final Intent intent = new Intent(SECRET_CODE_ACTION,
-                    Uri.parse("android_secret_code://" + input.substring(4, len - 4)));
+                    Uri.parse("android_secret_code://" + sanitizedInput));
             context.sendBroadcast(intent);
             return true;
         }
 
+        return false;
+    }
+
+    private static boolean handleFactorySetCode(Context context, String input) {
+        int len = input.length();
+        if (input.equals(MMI_FACTORY_MODE_DISPLAY)) {
+            Intent intent = new Intent(SECRET_CODE_ACTION,
+                    Uri.parse("android_secret_code://" + input.substring(1, len - 1)));
+            context.sendBroadcast(intent);
+            return true;
+        }
         return false;
     }
 
@@ -383,6 +431,16 @@ public class SpecialCharSequenceMgr {
         return false;
     }
 
+    private static boolean handleEngineerModeDisplay(Context context, String input) {
+        if (input.equals(MMI_ENGINEER_MODE_DISPLAY)) {
+            Intent intent = new Intent(SECRET_CODE_ACTION,
+                    Uri.parse("android_secret_code://3878"));
+            context.sendBroadcast(intent);
+            return true;
+        }
+        return false;
+    }
+
     /*******
      * This code is used to handle SIM Contact queries
      *******/
@@ -496,7 +554,7 @@ public class SpecialCharSequenceMgr {
                     Context context = sc.progressDialog.getContext();
                     name = context.getString(R.string.menu_callNumber, name);
                     Toast.makeText(context, name, Toast.LENGTH_SHORT)
-                        .show();
+                            .show();
                 }
             } finally {
                 MoreCloseables.closeQuietly(c);

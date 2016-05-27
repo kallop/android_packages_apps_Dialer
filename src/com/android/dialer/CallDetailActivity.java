@@ -17,55 +17,55 @@
 package com.android.dialer;
 
 import android.app.Activity;
+import android.app.DialogFragment;
 import android.content.ContentResolver;
+import android.content.ComponentName;
 import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.PowerManager;
 import android.provider.ContactsContract.CommonDataKinds.Phone;
-import android.provider.VoicemailContract.Voicemails;
-import android.telecom.PhoneAccount;
 import android.telecom.PhoneAccountHandle;
-import android.telephony.TelephonyManager;
 import android.text.BidiFormatter;
 import android.text.TextDirectionHeuristics;
 import android.text.TextUtils;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.LinearLayout;
 import android.widget.ListView;
-import android.widget.QuickContactBadge;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import com.android.contacts.common.ContactPhotoManager;
 import com.android.contacts.common.ContactPhotoManager.DefaultImageRequest;
-import com.android.contacts.common.util.PermissionsUtil;
+import com.android.contacts.common.util.ContactDisplayUtils;
 import com.android.contacts.common.GeoUtil;
 import com.android.contacts.common.CallUtil;
+import com.android.contacts.common.activity.fragment.BlockContactDialogFragment;
+import com.android.contacts.common.util.BlockContactHelper;
 import com.android.contacts.common.util.UriUtils;
 import com.android.dialer.calllog.CallDetailHistoryAdapter;
 import com.android.dialer.calllog.CallLogAsyncTaskUtil.CallLogAsyncTaskListener;
 import com.android.dialer.calllog.CallLogAsyncTaskUtil;
 import com.android.dialer.calllog.CallTypeHelper;
-import com.android.dialer.calllog.ContactInfo;
 import com.android.dialer.calllog.ContactInfoHelper;
 import com.android.dialer.calllog.PhoneAccountUtils;
-import com.android.dialer.calllog.PhoneNumberDisplayUtil;
-import com.android.dialer.util.DialerUtils;
+import com.android.dialer.util.ImageUtils;
 import com.android.dialer.util.IntentUtil;
 import com.android.dialer.util.PhoneNumberUtil;
 import com.android.dialer.util.TelecomUtil;
+import com.android.phone.common.incall.DialerDataSubscription;
 import com.android.services.callrecorder.CallRecordingDataStore;
+import com.android.dialer.widget.DialerQuickContact;
+import com.android.phone.common.incall.CallMethodInfo;
 
-import java.util.List;
+import com.cyanogen.ambient.incall.extension.OriginCodes;
+import com.cyanogen.lookup.phonenumber.contract.LookupProvider;
+import com.cyanogen.lookup.phonenumber.provider.LookupProviderImpl;
 
 /**
  * Displays the details of a specific call log entry.
@@ -74,8 +74,9 @@ import java.util.List;
  * {@link #EXTRA_CALL_LOG_IDS} extra to specify a group of call log entries.
  */
 public class CallDetailActivity extends Activity
-        implements MenuItem.OnMenuItemClickListener {
+        implements MenuItem.OnMenuItemClickListener, BlockContactDialogFragment.Callbacks {
     private static final String TAG = "CallDetail";
+    private static final boolean DEBUG = false;
 
      /** A long array extra containing ids of call log entries to display. */
     public static final String EXTRA_CALL_LOG_IDS = "EXTRA_CALL_LOG_IDS";
@@ -115,7 +116,9 @@ public class CallDetailActivity extends Activity
             final int numberPresentation = firstDetails.numberPresentation;
             final Uri contactUri = firstDetails.contactUri;
             final Uri photoUri = firstDetails.photoUri;
+            final long photoId = firstDetails.photoId;
             final PhoneAccountHandle accountHandle = firstDetails.accountHandle;
+            mInCallComponentName = firstDetails.inCallComponentName;
 
             // Cache the details about the phone number.
             final boolean canPlaceCallsTo =
@@ -154,7 +157,8 @@ public class CallDetailActivity extends Activity
             }
 
             mHasEditNumberBeforeCallOption =
-                    canPlaceCallsTo && !isSipNumber && !mIsVoicemailNumber;
+                    canPlaceCallsTo && !isSipNumber && !mIsVoicemailNumber &&
+                            mInCallComponentName == null;
             mHasReportMenuOption = mContactInfoHelper.canReportAsInvalid(
                     firstDetails.sourceType, firstDetails.objectId);
             invalidateOptionsMenu();
@@ -180,8 +184,32 @@ public class CallDetailActivity extends Activity
                 nameForDefaultImage = firstDetails.name.toString();
             }
 
-            loadContactPhotos(
-                    contactUri, photoUri, nameForDefaultImage, lookupKey, contactType);
+            mBlockContactHelper.setContactInfo(mNumber);
+            loadContactPhotos(contactUri, photoUri, nameForDefaultImage, lookupKey, contactType,
+                    photoId, mInCallComponentName);
+
+            // incorporate information from contact-info provider
+            if (!TextUtils.isEmpty(firstDetails.photoUrl) && !firstDetails.isSpam) {
+                ImageUtils.loadBitampFromUrl(CallDetailActivity.this,
+                        firstDetails.photoUrl,
+                        mDialerQuickContact.getQuickContactBadge());
+            } else if (firstDetails.isSpam) {
+               mCallerName.setTextColor(
+                        mResources.getColor(R.color.spam_contact_color, mContext.getTheme()));
+
+                mSpamInfo.setVisibility(View.VISIBLE);
+                mSpamInfo.setText(mContext.getResources().getQuantityString(
+                        R.plurals.spam_count_text, firstDetails.spamCount,
+                        firstDetails.spamCount));
+
+                mDialerQuickContact.getQuickContactBadge().setImageResource(
+                        R.drawable.ic_spam_avatar);
+            }
+
+            if (firstDetails.attributionDrawable != null) {
+                mDialerQuickContact.setAttributionBadge(firstDetails.attributionDrawable);
+            }
+
             findViewById(R.id.call_detail).setVisibility(View.VISIBLE);
         }
 
@@ -194,8 +222,18 @@ public class CallDetailActivity extends Activity
          */
         private CharSequence getNumberTypeOrLocation(PhoneCallDetails details) {
             if (!TextUtils.isEmpty(details.name)) {
-                return Phone.getTypeLabel(mResources, details.numberType,
-                        details.numberLabel);
+                String callMethodName = null;
+                if (details.inCallComponentName != null) {
+                    CallMethodInfo cmi = DialerDataSubscription.get(mContext)
+                            .getPluginIfExists(details.inCallComponentName);
+                    if (cmi != null) {
+                        callMethodName = cmi.mName;
+                    }
+                }
+
+                return ContactDisplayUtils.getLabelForCall(getApplicationContext(),
+                        details.number.toString(), details.numberType,
+                        details.numberLabel, callMethodName);
             } else {
                 return details.geocode;
             }
@@ -204,14 +242,18 @@ public class CallDetailActivity extends Activity
 
     private Context mContext;
     private CallTypeHelper mCallTypeHelper;
-    private QuickContactBadge mQuickContactBadge;
+    private DialerQuickContact mDialerQuickContact;
     private TextView mCallerName;
     private TextView mCallerNumber;
     private TextView mAccountLabel;
     private View mCallButton;
+    private TextView mSpamInfo;
+    private LookupProvider mLookupProvider;
     private ContactInfoHelper mContactInfoHelper;
+    private BlockContactHelper mBlockContactHelper;
 
     protected String mNumber;
+    private ComponentName mInCallComponentName;
     private boolean mIsVoicemailNumber;
     private String mDefaultCountryIso;
 
@@ -244,11 +286,12 @@ public class CallDetailActivity extends Activity
 
         mVoicemailUri = getIntent().getParcelableExtra(EXTRA_VOICEMAIL_URI);
 
-        mQuickContactBadge = (QuickContactBadge) findViewById(R.id.quick_contact_photo);
-        mQuickContactBadge.setOverlay(null);
-        mQuickContactBadge.setPrioritizedMimeType(Phone.CONTENT_ITEM_TYPE);
+        mDialerQuickContact = (DialerQuickContact) findViewById(R.id.quick_contact_photo);
+        mDialerQuickContact.setOverlay(null);
+        mDialerQuickContact.setPrioritizedMimeType(Phone.CONTENT_ITEM_TYPE);
         mCallerName = (TextView) findViewById(R.id.caller_name);
         mCallerNumber = (TextView) findViewById(R.id.caller_number);
+        mSpamInfo = (TextView) findViewById(R.id.spam_info);
         mAccountLabel = (TextView) findViewById(R.id.phone_account_label);
         mDefaultCountryIso = GeoUtil.getCurrentCountryIso(this);
         mContactPhotoManager = ContactPhotoManager.getInstance(this);
@@ -257,11 +300,23 @@ public class CallDetailActivity extends Activity
         mCallButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                mContext.startActivity(IntentUtil.getCallIntent(mNumber));
+                if (mInCallComponentName != null) {
+                    CallMethodInfo cmi = DialerDataSubscription.get(mContext)
+                            .getPluginIfExists(mInCallComponentName);
+                    if (cmi != null) {
+                        cmi.placeCall(OriginCodes.CALL_LOG_CALL, mNumber, mContext);
+                        return;
+                    }
+                }
+                mContext.startActivity(IntentUtil.getCallIntent(mNumber,
+                        OriginCodes.CALL_LOG_CALL));
             }
         });
 
-        mContactInfoHelper = new ContactInfoHelper(this, GeoUtil.getCurrentCountryIso(this));
+        mBlockContactHelper = new BlockContactHelper(this);
+        mLookupProvider = LookupProviderImpl.INSTANCE.get(this);
+        mContactInfoHelper = new ContactInfoHelper(this, GeoUtil.getCurrentCountryIso(this),
+                mLookupProvider);
         getActionBar().setDisplayHomeAsUpEnabled(true);
 
         if (getIntent().getBooleanExtra(EXTRA_FROM_NOTIFICATION, false)) {
@@ -272,6 +327,8 @@ public class CallDetailActivity extends Activity
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        LookupProviderImpl.INSTANCE.release();
+        mBlockContactHelper.destroy();
         mCallRecordingDataStore.close();
     }
 
@@ -315,17 +372,48 @@ public class CallDetailActivity extends Activity
 
     /** Load the contact photos and places them in the corresponding views. */
     private void loadContactPhotos(Uri contactUri, Uri photoUri, String displayName,
-            String lookupKey, int contactType) {
+            String lookupKey, int contactType, long photoId, ComponentName inCallComponentName) {
 
         final DefaultImageRequest request = new DefaultImageRequest(displayName, lookupKey,
                 contactType, true /* isCircular */);
 
-        mQuickContactBadge.assignContactUri(contactUri);
-        mQuickContactBadge.setContentDescription(
+        mDialerQuickContact.assignContactUri(contactUri);
+        mDialerQuickContact.setContentDescription(
                 mResources.getString(R.string.description_contact_details, displayName));
+        setAttributionImage(inCallComponentName);
 
-        mContactPhotoManager.loadDirectoryPhoto(mQuickContactBadge, photoUri,
-                false /* darkTheme */, true /* isCircular */, request);
+        if (photoId == 0 && photoUri != null) {
+            mContactPhotoManager.loadDirectoryPhoto(mDialerQuickContact.getQuickContactBadge(),
+                    photoUri, false /* darkTheme */, true /* isCircular */, request);
+        } else {
+            ContactPhotoManager.getInstance(mContext).loadThumbnail(
+                    mDialerQuickContact.getQuickContactBadge(), photoId, false /* darkTheme */,
+                    true /* isCircular */, request);
+        }
+    }
+
+    private void setAttributionImage(ComponentName cn) {
+        if (cn == null) {
+            mDialerQuickContact.setAttributionBadge(null);
+        } else {
+            CallMethodInfo cmi = DialerDataSubscription.get(mContext).getPluginIfExists(cn);
+            if (cmi == null) {
+                mDialerQuickContact.setAttributionBadge(null);
+                if (DEBUG) Log.d(TAG, "Call Method was Null for: " + cn.toShortString());
+            } else {
+                mDialerQuickContact.setAttributionBadge(cmi.mBadgeIcon);
+            }
+        }
+    }
+
+    @Override
+    public void onBlockSelected(boolean notifyLookupProvider) {
+        mBlockContactHelper.blockContactAsync(notifyLookupProvider);
+    }
+
+    @Override
+    public void onUnblockSelected(boolean notifyLookupProvider) {
+        mBlockContactHelper.unblockContactAsync(notifyLookupProvider);
     }
 
     @Override
@@ -350,6 +438,14 @@ public class CallDetailActivity extends Activity
         menu.findItem(R.id.menu_report)
                 .setVisible(mHasReportMenuOption)
                 .setOnMenuItemClickListener(this);
+
+        boolean canBlock = mBlockContactHelper.canBlockContact(this);
+        menu.findItem(R.id.menu_block_contact)
+                .setVisible(canBlock)
+                .setTitle(canBlock && mBlockContactHelper.isContactBlacklisted()
+                        ? R.string.menu_unblock_contact : R.string.menu_block_contact)
+                .setOnMenuItemClickListener(this);
+
         return super.onPrepareOptionsMenu(menu);
     }
 
@@ -374,9 +470,16 @@ public class CallDetailActivity extends Activity
                 CallLogAsyncTaskUtil.deleteVoicemail(
                         this, mVoicemailUri, mCallLogAsyncTaskListener);
                 break;
-            case R.id.menu_add_to_blacklist:
-                mContactInfoHelper.addNumberToBlacklist(mNumber);
-                break;
+            case R.id.menu_block_contact: {
+                // block contact dialog fragment
+                DialogFragment f = mBlockContactHelper.getBlockContactDialog(
+                        mBlockContactHelper.isContactBlacklisted() ?
+                                BlockContactHelper.BlockOperation.UNBLOCK :
+                                BlockContactHelper.BlockOperation.BLOCK
+                );
+                f.show(getFragmentManager(), "block_contact");
+                return true;
+            }
         }
         return true;
     }

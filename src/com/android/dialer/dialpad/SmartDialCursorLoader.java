@@ -18,14 +18,15 @@ package com.android.dialer.dialpad;
 
 import android.content.AsyncTaskLoader;
 import android.content.Context;
-import android.content.Loader.ForceLoadContentObserver;
 import android.database.Cursor;
 import android.database.MatrixCursor;
-import android.net.Uri;
+import android.provider.ContactsContract;
+import android.text.TextUtils;
 import android.util.Log;
 
 import com.android.contacts.common.list.PhoneNumberListAdapter.PhoneQuery;
 import com.android.contacts.common.util.PermissionsUtil;
+
 import com.android.dialer.database.DialerDatabaseHelper;
 import com.android.dialer.database.DialerDatabaseHelper.ContactNumber;
 import com.android.dialerbind.DatabaseHelperManager;
@@ -49,6 +50,9 @@ public class SmartDialCursorLoader extends AsyncTaskLoader<Cursor> {
 
     private ForceLoadContentObserver mObserver;
 
+    private String mCallableMimetype;
+    public static final String CALLABLE_EXTRA_NUMBER = "callable_extra_number";
+
     public SmartDialCursorLoader(Context context) {
         super(context);
         mContext = context;
@@ -58,7 +62,7 @@ public class SmartDialCursorLoader extends AsyncTaskLoader<Cursor> {
      * Configures the query string to be used to find SmartDial matches.
      * @param query The query string user typed.
      */
-    public void configureQuery(String query) {
+    public void configureQuery(String query, String callableMimetype) {
         if (DEBUG) {
             Log.v(TAG, "Configure new query to be " + query);
         }
@@ -66,6 +70,7 @@ public class SmartDialCursorLoader extends AsyncTaskLoader<Cursor> {
 
         /** Constructs a name matcher object for matching names. */
         mNameMatcher = new SmartDialNameMatcher(mQuery, SmartDialPrefix.getMap(), mContext);
+        mCallableMimetype = callableMimetype;
     }
 
     /**
@@ -86,23 +91,34 @@ public class SmartDialCursorLoader extends AsyncTaskLoader<Cursor> {
         final DialerDatabaseHelper dialerDatabaseHelper = DatabaseHelperManager.getDatabaseHelper(
                 mContext);
         final ArrayList<ContactNumber> allMatches = dialerDatabaseHelper.getLooseMatches(mQuery,
-                mNameMatcher);
+                mNameMatcher, mCallableMimetype);
 
         if (DEBUG) {
             Log.v(TAG, "Loaded matches " + String.valueOf(allMatches.size()));
         }
 
+        int projectionLength = PhoneQuery.PROJECTION_PRIMARY.length;
+
         /** Constructs a cursor for the returned array of results. */
         final MatrixCursor cursor = new MatrixCursor(PhoneQuery.PROJECTION_PRIMARY);
-        Object[] row = new Object[PhoneQuery.PROJECTION_PRIMARY.length];
+        Object[] row = new Object[projectionLength];
         for (ContactNumber contact : allMatches) {
-            row[PhoneQuery.PHONE_ID] = contact.dataId;
-            row[PhoneQuery.PHONE_NUMBER] = contact.phoneNumber;
-            row[PhoneQuery.CONTACT_ID] = contact.id;
-            row[PhoneQuery.LOOKUP_KEY] = contact.lookupKey;
-            row[PhoneQuery.PHOTO_ID] = contact.photoId;
-            row[PhoneQuery.DISPLAY_NAME] = contact.displayName;
-            cursor.addRow(row);
+            if (TextUtils.equals(contact.mimeType, mCallableMimetype) ||
+                    TextUtils.equals(contact.mimeType,
+                            ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE) ||
+                    TextUtils.equals(contact.mimeType,
+                            ContactsContract.CommonDataKinds.SipAddress.CONTENT_ITEM_TYPE)) {
+                row[PhoneQuery.CONTACT_ID] = contact.id;
+                row[PhoneQuery.LOOKUP_KEY] = contact.lookupKey;
+                row[PhoneQuery.PHOTO_ID] = contact.photoId;
+                row[PhoneQuery.DISPLAY_NAME] = contact.displayName;
+                row[PhoneQuery.PHONE_ID] = contact.dataId;
+                row[PhoneQuery.PHONE_NUMBER] = contact.phoneNumber;
+                row[PhoneQuery.PHONE_MIME_TYPE] = contact.mimeType;
+                row[PhoneQuery.PHONE_TYPE] = contact.phoneType;
+                row[PhoneQuery.PHONE_LABEL] = contact.phoneLabel;
+                cursor.addRow(row);
+            }
         }
         return cursor;
     }

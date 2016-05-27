@@ -25,28 +25,34 @@ import android.provider.ContactsContract.CommonDataKinds.Phone;
 import android.provider.ContactsContract.Contacts;
 import android.provider.ContactsContract.DisplayNameSources;
 import android.provider.ContactsContract.PhoneLookup;
-import android.provider.Settings;
-import android.provider.Telephony;
+import android.telecom.PhoneAccount;
+import android.telecom.PhoneAccountHandle;
 import android.telephony.PhoneNumberUtils;
 import android.text.TextUtils;
 import android.util.Log;
-import android.widget.Toast;
 
 import com.android.contacts.common.util.Constants;
 import com.android.contacts.common.util.PermissionsUtil;
 import com.android.contacts.common.util.PhoneNumberHelper;
 import com.android.contacts.common.util.UriUtils;
 import com.android.dialer.R;
+import com.android.dialer.lookup.ContactBuilder;
 import com.android.dialer.lookup.LookupCache;
 import com.android.dialer.service.CachedNumberLookupService;
 import com.android.dialer.service.CachedNumberLookupService.CachedContactInfo;
+import com.android.dialer.util.MetricsHelper;
 import com.android.dialer.util.TelecomUtil;
 import com.android.dialerbind.ObjectFactory;
 
+import com.cyanogen.lookup.phonenumber.contract.LookupProvider;
+import com.cyanogen.lookup.phonenumber.provider.LookupProviderImpl;
+import com.cyanogen.lookup.phonenumber.request.LookupRequest;
+import com.cyanogen.lookup.phonenumber.response.LookupResponse;
+import com.cyanogen.lookup.phonenumber.response.StatusCode;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.util.List;
+import java.util.Locale;
 
 /**
  * Utility class to look up the contact information for a given number.
@@ -54,15 +60,26 @@ import java.util.List;
 public class ContactInfoHelper {
     private static final String TAG = ContactInfoHelper.class.getSimpleName();
 
+    /**
+     * If this boolean parameter is set to true, then the appended query is treated as a
+     * InCallApi plugin contact ID and the lookup will be performed against InCallApi contacts in
+     * the user's contacts.
+     */
+    // TODO: Move this to a more central place
+    private static final String QUERY_PARAMETER_INCALLAPI_ID = "incallapi_contactid";
+
     private final Context mContext;
     private final String mCurrentCountryIso;
+    private final LookupProvider mLookupProvider;
 
     private static final CachedNumberLookupService mCachedNumberLookupService =
             ObjectFactory.newCachedNumberLookupService();
 
-    public ContactInfoHelper(Context context, String currentCountryIso) {
+    public ContactInfoHelper(Context context, String currentCountryIso,
+                             LookupProvider lookupProvider) {
         mContext = context;
         mCurrentCountryIso = currentCountryIso;
+        mLookupProvider = lookupProvider;
     }
 
     /**
@@ -75,8 +92,10 @@ public class ContactInfoHelper {
      *
      * @param number the number to look up
      * @param countryIso the country associated with this number
+     * @param isInCallPluginContactId true if number is an InCallApi plugin contact id
      */
-    public ContactInfo lookupNumber(String number, String countryIso) {
+    public ContactInfo lookupNumber(String number, String countryIso,
+            boolean isInCallPluginContactId) {
         if (TextUtils.isEmpty(number)) {
             return null;
         }
@@ -91,13 +110,19 @@ public class ContactInfoHelper {
                 // actually the phone number of a contact.
                 String username = PhoneNumberHelper.getUsernameFromUriNumber(number);
                 if (PhoneNumberUtils.isGlobalPhoneNumber(username)) {
-                    sipInfo = queryContactInfoForPhoneNumber(username, countryIso);
+                    sipInfo = queryContactInfoForPhoneNumber(username, countryIso, false);
                 }
             }
             info = sipInfo;
         } else {
             // Look for a contact that has the given phone number.
-            ContactInfo phoneInfo = queryContactInfoForPhoneNumber(number, countryIso);
+            ContactInfo phoneInfo =
+                    queryContactInfoForPhoneNumber(number, countryIso, isInCallPluginContactId);
+
+            // If we got a result, but the data is invalid, bail out and try again later.
+            if (phoneInfo != null && phoneInfo.isBadData) {
+                return null;
+            }
 
             if (phoneInfo == null || phoneInfo == ContactInfo.EMPTY) {
                 // Check whether the phone number has been saved as an "Internet call" number.
@@ -175,23 +200,42 @@ public class ContactInfoHelper {
         Cursor phonesCursor =
                 mContext.getContentResolver().query(uri, PhoneQuery._PROJECTION, null, null, null);
 
+        String data = uri.getPathSegments().size() > 1 ? uri.getLastPathSegment() : "";
+
         if (phonesCursor != null) {
             try {
                 if (phonesCursor.moveToFirst()) {
                     info = new ContactInfo();
+                    String lookupKey = null;
                     long contactId = phonesCursor.getLong(PhoneQuery.PERSON_ID);
-                    String lookupKey = phonesCursor.getString(PhoneQuery.LOOKUP_KEY);
-                    info.lookupKey = lookupKey;
-                    info.lookupUri = Contacts.getLookupUri(contactId, lookupKey);
-                    info.name = phonesCursor.getString(PhoneQuery.NAME);
                     info.type = phonesCursor.getInt(PhoneQuery.PHONE_TYPE);
                     info.label = phonesCursor.getString(PhoneQuery.LABEL);
                     info.number = phonesCursor.getString(PhoneQuery.MATCHED_NUMBER);
                     info.normalizedNumber = phonesCursor.getString(PhoneQuery.NORMALIZED_NUMBER);
-                    info.photoId = phonesCursor.getLong(PhoneQuery.PHOTO_ID);
-                    info.photoUri =
-                            UriUtils.parseUriOrNull(phonesCursor.getString(PhoneQuery.PHOTO_URI));
                     info.formattedNumber = null;
+                    if (PhoneNumberUtils.isGlobalPhoneNumber(data)) {
+                        lookupKey = phonesCursor.getString(PhoneQuery.LOOKUP_KEY);
+                        info.name = phonesCursor.getString(PhoneQuery.NAME);
+                        info.photoId = phonesCursor.getLong(PhoneQuery.PHOTO_ID);
+                        info.photoUri = UriUtils.parseUriOrNull(
+                                phonesCursor.getString(PhoneQuery.PHOTO_URI));
+                    } else {
+                        try {
+                            lookupKey = phonesCursor.getString(
+                                    phonesCursor.getColumnIndexOrThrow("lookup"));
+                            info.name = phonesCursor.getString(
+                                    phonesCursor.getColumnIndexOrThrow("display_name"));
+                            info.photoId = phonesCursor.getLong(
+                                    phonesCursor.getColumnIndexOrThrow("photo_id"));
+                            info.photoUri = UriUtils.parseUriOrNull(phonesCursor.getString(
+                                    phonesCursor.getColumnIndexOrThrow("photo_uri")));
+                        } catch (IllegalArgumentException e) {
+                            Log.e(TAG, "Contact information invalid, cannot find needed column(s)",
+                                    e);
+                        }
+                    }
+                    info.lookupKey = lookupKey;
+                    info.lookupUri = Contacts.getLookupUri(contactId, lookupKey);
                 } else {
                     info = ContactInfo.EMPTY;
                 }
@@ -236,7 +280,8 @@ public class ContactInfoHelper {
      * <p>
      * If the lookup fails for some other reason, it returns null.
      */
-    private ContactInfo queryContactInfoForPhoneNumber(String number, String countryIso) {
+    private ContactInfo queryContactInfoForPhoneNumber(String number, String countryIso,
+            boolean isInCallPluginContactId) {
         if (TextUtils.isEmpty(number)) {
             return null;
         }
@@ -252,9 +297,12 @@ public class ContactInfoHelper {
         }
 
         // The "contactNumber" is a regular phone number, so use the PhoneLookup table.
-        Uri uri = Uri.withAppendedPath(PhoneLookup.ENTERPRISE_CONTENT_FILTER_URI,
-                Uri.encode(contactNumber));
-        ContactInfo info = lookupContactFromUri(uri);
+        Uri.Builder uriBuilder = PhoneLookup.ENTERPRISE_CONTENT_FILTER_URI.buildUpon();
+        uriBuilder.appendPath(Uri.encode(contactNumber));
+        uriBuilder.appendQueryParameter(QUERY_PARAMETER_INCALLAPI_ID,
+                String.valueOf(isInCallPluginContactId));
+        ContactInfo info = lookupContactFromUri(uriBuilder.build());
+        boolean isLocalContact = info != null && info != ContactInfo.EMPTY;
         if (info != null && info != ContactInfo.EMPTY) {
             info.formattedNumber = formatPhoneNumber(number, null, countryIso);
         } else if (LookupCache.hasCachedContact(mContext, number)) {
@@ -266,6 +314,62 @@ public class ContactInfoHelper {
                 info = cacheInfo.getContactInfo().isBadData ? null : cacheInfo.getContactInfo();
             } else {
                 info = null;
+            }
+        }
+        // always do a LookupProvider search, if available, for a non-contact
+        if (mLookupProvider.isEnabled() && !isLocalContact) {
+            LookupResponse response = mLookupProvider.blockingFetchInfo(
+                    new LookupRequest(PhoneNumberUtils.formatNumberToE164(number, countryIso),
+                            null, LookupRequest.RequestOrigin.OTHER)
+                    );
+
+            if (response != null) {
+                if (response.mStatusCode == StatusCode.FAIL) {
+                    info.isBadData = true;
+                } else if (response.mStatusCode == StatusCode.SUCCESS) {
+                    logSuccessfulFetch();
+                    final String formattedNumber = formatPhoneNumber(response.mNumber, null, countryIso);
+                    // map LookupResponse to ContactInfo
+                    ContactInfo contactInfo = new ContactInfo();
+                    contactInfo.sourceType = 1;
+                    contactInfo.lookupProviderName = response.mProviderName;
+                    contactInfo.name = response.mName;
+                    contactInfo.number = formatPhoneNumber(response.mNumber, null, countryIso);
+                    contactInfo.city = response.mCity;
+                    contactInfo.country = response.mCountry;
+                    contactInfo.address = response.mAddress;
+                    contactInfo.photoUrl = response.mPhotoUrl;
+                    contactInfo.isSpam = response.mIsSpam;
+                    contactInfo.spamCount = response.mSpamCount;
+                    contactInfo.attributionDrawable = response.mAttributionLogo;
+
+                    StringBuilder succinctLocation = new StringBuilder();
+                    // convert country code to country name
+                    String country = new Locale("", response.mCountry).getDisplayCountry();
+
+                    if (!TextUtils.isEmpty(response.mCity)) {
+                        succinctLocation.append(response.mCity);
+                    }
+                    if (!TextUtils.isEmpty(country)) {
+                        if (succinctLocation.length() > 0) {
+                            succinctLocation.append(", ");
+                        }
+                        succinctLocation.append(country);
+                    }
+                    contactInfo.label = succinctLocation.toString();
+
+                    // construct encoded lookup uri
+                    ContactBuilder contactBuilder = new ContactBuilder(ContactBuilder.REVERSE_LOOKUP,
+                            response.mNumber, formattedNumber);
+                    contactBuilder.setInfoProviderName(response.mProviderName);
+                    contactBuilder.setPhotoUrl(response.mPhotoUrl);
+                    contactBuilder.setName(ContactBuilder.Name.createDisplayName(response.mName));
+                    contactBuilder.setIsSpam(response.mIsSpam);
+                    contactBuilder.setSpamCount(response.mSpamCount);
+
+                    contactInfo.lookupUri = contactBuilder.build().lookupUri;
+                    info = contactInfo;
+                }
             }
         }
         return info;
@@ -405,7 +509,7 @@ public class ContactInfoHelper {
      *
      * @param c A cursor pointing to an entry in the call log.
      */
-    public static ContactInfo getContactInfo(Cursor c) {
+    public static ContactInfo getContactInfo(Context context, Cursor c) {
         ContactInfo info = new ContactInfo();
 
         info.lookupUri = UriUtils.parseUriOrNull(c.getString(CallLogQuery.CACHED_LOOKUP_URI));
@@ -419,6 +523,15 @@ public class ContactInfoHelper {
         info.photoUri = UriUtils.nullForNonContactsUri(
                 UriUtils.parseUriOrNull(c.getString(CallLogQuery.CACHED_PHOTO_URI)));
         info.formattedNumber = c.getString(CallLogQuery.CACHED_FORMATTED_NUMBER);
+
+        final String componentString = c.getString(CallLogQuery.ACCOUNT_COMPONENT_NAME);
+        final String accountId = c.getString(CallLogQuery.ACCOUNT_ID);
+        final String countryIso = c.getString(CallLogQuery.COUNTRY_ISO);
+        info.isInCallPluginContactId = isInCallPluginContactId(context,
+                PhoneAccountUtils.getAccount(componentString, accountId),
+                info.number,
+                countryIso,
+                c.getString(CallLogQuery.PLUGIN_PACKAGE_NAME));
 
         return info;
     }
@@ -447,48 +560,23 @@ public class ContactInfoHelper {
                 && mCachedNumberLookupService.canReportAsInvalid(sourceType, objectId);
     }
 
-    /**
-     * Checks whether calls can be blacklisted; that is, whether the
-     * phone blacklist is enabled
-     */
-    public boolean canBlacklistCalls() {
-        return Settings.System.getInt(mContext.getContentResolver(),
-                Settings.System.PHONE_BLACKLIST_ENABLED, 1) != 0;
+    private void logSuccessfulFetch() {
+        MetricsHelper.Field field = new MetricsHelper.Field(
+                MetricsHelper.Fields.PROVIDER_PACKAGE_NAME,
+                mLookupProvider.getUniqueIdentifier());
+        MetricsHelper.sendEvent(
+                MetricsHelper.Categories.PROVIDER_PROVIDED_INFORMATION,
+                MetricsHelper.Actions.PROVIDED_INFORMATION,
+                MetricsHelper.State.CALL_LOG,
+                field);
     }
 
-    /**
-     * Requests the given number to be added to the phone blacklist
-     *
-     * @param number the number to be blacklisted
-     */
-    public void addNumberToBlacklist(String number) {
-        ContentValues cv = new ContentValues();
-        cv.put(Telephony.Blacklist.PHONE_MODE, 1);
+    public static boolean isInCallPluginContactId(Context context,
+            PhoneAccountHandle accountHandle, String number, String countryIso, String pluginName) {
+        boolean isInCallPluginContactId = accountHandle == null &&
+                !PhoneNumberHelper.isValidNumber(context, number, countryIso) &&
+                !TextUtils.isEmpty(pluginName);
 
-        Uri uri = Uri.withAppendedPath(Telephony.Blacklist.CONTENT_FILTER_BYNUMBER_URI, number);
-        int count = mContext.getContentResolver().update(uri, cv, null, null);
-
-        if (count != 0) {
-            // Give the user some feedback
-            String message = mContext.getString(R.string.toast_added_to_blacklist, number);
-            Toast.makeText(mContext, message, Toast.LENGTH_SHORT).show();
-        }
+        return isInCallPluginContactId;
     }
-
-    /**
-     * Requests the given number to be removed from phone blacklist
-     *
-     * @param number the number to be removed from blacklist
-     */
-    public void removeNumberFromBlacklist(String number) {
-        Uri uri = Uri.withAppendedPath(Telephony.Blacklist.CONTENT_FILTER_BYNUMBER_URI, number);
-        int count = mContext.getContentResolver().delete(uri, null, null);
-
-        if (count != 0) {
-            // Give the user some feedback
-            String message = mContext.getString(R.string.toast_removed_from_blacklist, number);
-            Toast.makeText(mContext, message, Toast.LENGTH_SHORT).show();
-        }
-    }
-
 }

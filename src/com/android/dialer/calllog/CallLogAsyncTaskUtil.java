@@ -16,6 +16,7 @@
 
 package com.android.dialer.calllog;
 
+import android.content.ComponentName;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
@@ -29,12 +30,16 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import com.android.contacts.common.GeoUtil;
+import com.android.contacts.common.util.PhoneNumberHelper;
 import com.android.dialer.PhoneCallDetails;
 import com.android.dialer.util.AsyncTaskExecutor;
 import com.android.dialer.util.AsyncTaskExecutors;
 import com.android.dialer.util.PhoneNumberUtil;
 import com.android.dialer.util.TelecomUtil;
 
+import com.cyanogen.ambient.incall.CallLogConstants;
+
+import com.cyanogen.lookup.phonenumber.provider.LookupProviderImpl;
 import com.google.common.annotations.VisibleForTesting;
 
 public class CallLogAsyncTaskUtil {
@@ -61,7 +66,9 @@ public class CallLogAsyncTaskUtil {
             CallLog.Calls.PHONE_ACCOUNT_ID,
             CallLog.Calls.FEATURES,
             CallLog.Calls.DATA_USAGE,
-            CallLog.Calls.TRANSCRIPTION
+            CallLog.Calls.TRANSCRIPTION,
+            CallLog.Calls.CACHED_PHOTO_ID,
+            CallLogConstants.PLUGIN_PACKAGE_NAME
         };
 
         static final int DATE_COLUMN_INDEX = 0;
@@ -76,6 +83,8 @@ public class CallLogAsyncTaskUtil {
         static final int FEATURES = 9;
         static final int DATA_USAGE = 10;
         static final int TRANSCRIPTION_COLUMN_INDEX = 11;
+        static final int CACHED_PHOTO_ID = 12;
+        static final int PLUGIN_PACKAGE_NAME = 13;
     }
 
     public interface CallLogAsyncTaskListener {
@@ -149,17 +158,23 @@ public class CallLogAsyncTaskUtil {
                     cursor.getString(CallDetailQuery.ACCOUNT_COMPONENT_NAME),
                     cursor.getString(CallDetailQuery.ACCOUNT_ID));
 
+            final boolean isInCallPluginContactId =
+                    ContactInfoHelper.isInCallPluginContactId(context, accountHandle, number,
+                            countryIso, cursor.getString(CallDetailQuery.PLUGIN_PACKAGE_NAME));
+
             // If this is not a regular number, there is no point in looking it up in the contacts.
-            ContactInfoHelper contactInfoHelper =
-                    new ContactInfoHelper(context, GeoUtil.getCurrentCountryIso(context));
             boolean isVoicemail = PhoneNumberUtil.isVoicemailNumber(context, accountHandle, number);
             boolean shouldLookupNumber =
                     PhoneNumberUtil.canPlaceCallsTo(number, numberPresentation) && !isVoicemail;
 
             ContactInfo info = ContactInfo.EMPTY;
             if (shouldLookupNumber) {
-                ContactInfo lookupInfo = contactInfoHelper.lookupNumber(number, countryIso);
+                ContactInfoHelper contactInfoHelper =
+                        new ContactInfoHelper(context, GeoUtil.getCurrentCountryIso(context),
+                                LookupProviderImpl.INSTANCE.get(context));
+                ContactInfo lookupInfo = contactInfoHelper.lookupNumber(number, countryIso, false);
                 info = lookupInfo != null ? lookupInfo : ContactInfo.EMPTY;
+                LookupProviderImpl.INSTANCE.release();
             }
 
             PhoneCallDetails details = new PhoneCallDetails(
@@ -189,6 +204,23 @@ public class CallLogAsyncTaskUtil {
             if (!cursor.isNull(CallDetailQuery.DATA_USAGE)) {
                 details.dataUsage = cursor.getLong(CallDetailQuery.DATA_USAGE);
             }
+
+            if (!cursor.isNull(CallDetailQuery.CACHED_PHOTO_ID)) {
+                details.photoId = cursor.getLong(CallDetailQuery.CACHED_PHOTO_ID);
+            }
+
+            String component = cursor.getString(CallDetailQuery.PLUGIN_PACKAGE_NAME);
+            if (!TextUtils.isEmpty(component)) {
+                details.inCallComponentName = ComponentName.unflattenFromString(component);
+            } else {
+                details.inCallComponentName = null;
+            }
+
+            details.isSpam = info.isSpam;
+            details.spamCount = info.spamCount;
+            details.photoUrl = info.photoUrl;
+            details.lookupProviderName = info.lookupProviderName;
+            details.attributionDrawable = info.attributionDrawable;
 
             return details;
         } finally {
